@@ -7,19 +7,7 @@ import requests
 import pandas as pd
 import plotly.express as px
 import os
-import tensorflow as tf
-
-# Suppress TensorFlow warnings
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
-
-# Import DeepFace after TensorFlow is configured
-try:
-    from deepface import DeepFace
-except ImportError as e:
-    st.error(f"Error importing DeepFace: {e}")
-    st.info("Try reinstalling the dependencies with the correct versions.")
-    st.stop()
+from fer import FER
 
 def load_lottieurl(url):
     try:
@@ -39,7 +27,7 @@ emotion_animations = {
     "fear": "https://assets3.lottiefiles.com/packages/lf20_5pGzPy.json",
     "surprise": "https://assets3.lottiefiles.com/packages/lf20_kvtpp3tw.json",
     "neutral": "https://assets3.lottiefiles.com/packages/lf20_j1adxtyb.json",
-    "disgust": "https://assets3.lottiefiles.com/packages/lf20_qz0lj1bd.json"  # Added disgust animation
+    "disgust": "https://assets3.lottiefiles.com/packages/lf20_qz0lj1bd.json"
 }
 
 def main():
@@ -64,63 +52,75 @@ def main():
                 # Convert PIL image to cv2 format
                 img_array = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
                 
-                # Analyze emotions
-                results = DeepFace.analyze(
-                    img_array, 
-                    actions=["emotion"], 
-                    enforce_detection=False,
-                    silent=True  # Suppress DeepFace progress messages
-                )
+                # Initialize FER detector
+                detector = FER()
                 
-                # Handle different result formats
-                if isinstance(results, list):
-                    result = results[0]
-                else:
-                    result = results
+                # Detect emotions
+                emotions = detector.detect_emotions(img_array)
+                
+                if emotions and len(emotions) > 0:
+                    # Get emotions from the first face detected
+                    emotions_dict = emotions[0]["emotions"]
                     
-                emotion = result.get("dominant_emotion", "Unknown").lower()
-                emotions_scores = result.get("emotion", {})
-                
-                # Convert emotion scores to DataFrame
-                df = pd.DataFrame(list(emotions_scores.items()), columns=['Emotion', 'Score'])
-                df['Score'] = df['Score'].round(2)
-                df = df.sort_values(by='Score', ascending=False)
-                
-                # Create two columns for layout
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    # Display bar chart
-                    fig = px.bar(
-                        df, 
-                        x='Emotion', 
-                        y='Score',
-                        title='Emotion Scores',
-                        color='Score',
-                        color_continuous_scale='Viridis'
-                    )
-                    fig.update_layout(height=400)
-                    st.plotly_chart(fig, use_container_width=True)
-                
-                with col2:
-                    # Display animation
-                    if emotion in emotion_animations:
-                        st.markdown(f"### Detected: {emotion.capitalize()}")
-                        lottie_animation = load_lottieurl(emotion_animations[emotion])
-                        if lottie_animation:
-                            st_lottie(lottie_animation, height=300)
+                    # Get dominant emotion
+                    dominant_emotion = max(emotions_dict, key=emotions_dict.get)
+                    
+                    # Convert emotion scores to DataFrame
+                    df = pd.DataFrame(list(emotions_dict.items()), columns=['Emotion', 'Score'])
+                    df['Score'] = df['Score'] * 100  # Convert to percentage
+                    df['Score'] = df['Score'].round(2)
+                    df = df.sort_values(by='Score', ascending=False)
+                    
+                    # Create two columns for layout
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        # Display bar chart
+                        fig = px.bar(
+                            df, 
+                            x='Emotion', 
+                            y='Score',
+                            title='Emotion Scores',
+                            color='Score',
+                            color_continuous_scale='Viridis'
+                        )
+                        fig.update_layout(height=400)
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    with col2:
+                        # Display animation
+                        if dominant_emotion.lower() in emotion_animations:
+                            st.markdown(f"### Detected: {dominant_emotion.capitalize()}")
+                            lottie_animation = load_lottieurl(emotion_animations[dominant_emotion.lower()])
+                            if lottie_animation:
+                                st_lottie(lottie_animation, height=300)
+                            else:
+                                st.write("Animation failed to load.")
                         else:
-                            st.write("Animation failed to load.")
-                    else:
-                        st.markdown(f"### Detected: {emotion.capitalize()}")
-                        st.info("No animation available for this emotion.")
-                
-                # Display scores in a clean table
-                st.write("### Detailed Scores")
-                st.dataframe(
-                    df.style.format({'Score': '{:.2f}'}), 
-                    use_container_width=True
-                )
+                            st.markdown(f"### Detected: {dominant_emotion.capitalize()}")
+                            st.info("No animation available for this emotion.")
+                    
+                    # Display scores in a clean table
+                    st.write("### Detailed Scores")
+                    st.dataframe(
+                        df.style.format({'Score': '{:.2f}%'}), 
+                        use_container_width=True
+                    )
+                    
+                    # Display face locations
+                    if st.checkbox("Show detected face"):
+                        face_locations = emotions[0]["box"]
+                        x, y, w, h = face_locations
+                        
+                        # Draw rectangle on image
+                        img_with_face = np.array(image).copy()
+                        cv2.rectangle(img_with_face, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                        
+                        # Display image with bounding box
+                        st.image(img_with_face, caption="Detected Face", use_column_width=True)
+                        
+                else:
+                    st.warning("No faces detected in the image. Please try another image.")
                 
         except Exception as e:
             st.error(f"Error in emotion detection: {str(e)}")
